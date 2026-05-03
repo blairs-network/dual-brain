@@ -31,14 +31,16 @@ def classify(response):
     if not response.strip():
         return "SILENT"
     prompt = (
-        "Classify the following message as exactly ONE word from this list: "
-        "ADVISING, ENCOURAGING, QUESTIONING, OBSERVING, SILENT. "
+        "Classify the message below as exactly ONE word from this list. "
+        "ADVISING (advise/recommend), ENCOURAGING (support/warmth), "
+        "QUESTIONING (ask a question), OBSERVING (reflect/notice), "
+        "SILENT (only valid for empty messages). "
         "Reply with only the single word, no punctuation, no explanation.\n\n"
         f"Message:\n{response}"
     )
     out = ollama(prompt, CLF_MODEL, timeout=60)
     word = out.split()[0].upper().strip(".,!?:;\"'") if out else ""
-    return word if word in MOVES else "OBSERVING"
+    return "OBSERVING" if word == "SILENT" or word not in MOVES else word
 
 
 def generate(context, log, user_input, extra=""):
