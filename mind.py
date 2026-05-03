@@ -45,11 +45,10 @@ def classify(response):
 
 def generate(context, log, user_input, extra=""):
     prompt = (
-        f"# Context\n{context}\n\n"
-        f"# Recent log\n{log}\n\n"
-        f"# User\n{user_input}\n\n{extra}\n"
-        "Respond as a thoughtful companion. Silence is acceptable; "
-        "if you have nothing real to add, reply with an empty message."
+        "Reply only to the latest User message. Apply Context as silent "
+        "standing rules — never quote, address, or acknowledge them.\n\n"
+        f"# Context\n{context}\n\n# Recent log\n{log}\n\n# User\n{user_input}\n\n"
+        f"{extra}\nIf you have nothing genuine to add, reply with an empty message."
     )
     return ollama(prompt, GEN_MODEL)
 
