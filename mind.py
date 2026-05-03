@@ -59,7 +59,8 @@ def turn(user_input, last_move):
     response = generate(context, recent, user_input)
     move = classify(response)
     if move == last_move:
-        target = next(m for m in MOVES if m != last_move and m != "SILENT")
+        i = MOVES.index(last_move) if last_move in MOVES else -1
+        target = next(m for m in MOVES[i + 1:] + MOVES[:i] if m != "SILENT")
         response = generate(
             context, recent, user_input,
             extra=f"Your previous move was {move}. Make a {target} move instead.",
