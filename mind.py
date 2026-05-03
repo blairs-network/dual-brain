@@ -8,7 +8,7 @@ LOG = os.path.join(BASE, "log.md")
 STATE = os.path.join(BASE, "state.md")
 GEN_MODEL = os.environ.get("MIND_GEN_MODEL", "hermes3:8b")
 CLF_MODEL = os.environ.get("MIND_CLF_MODEL", "llama3.2:3b")
-MOVES = {"ADVISING", "ENCOURAGING", "QUESTIONING", "OBSERVING", "SILENT"}
+MOVES = ("ADVISING", "ENCOURAGING", "QUESTIONING", "OBSERVING", "SILENT")
 
 
 def read_file(path):
@@ -17,11 +17,6 @@ def read_file(path):
             return f.read()
     except FileNotFoundError:
         return ""
-
-
-def write_file(path, text, mode="w"):
-    with open(path, mode) as f:
-        f.write(text)
 
 
 def ollama(prompt, model, timeout=180):
@@ -49,7 +44,7 @@ def classify(response):
 def generate(context, log, user_input, extra=""):
     prompt = (
         f"# Context\n{context}\n\n"
-        f"# Recent log\n{log[-4000:]}\n\n"
+        f"# Recent log\n{log}\n\n"
         f"# User\n{user_input}\n\n{extra}\n"
         "Respond as a thoughtful companion. Silence is acceptable; "
         "if you have nothing real to add, reply with an empty message."
@@ -59,12 +54,15 @@ def generate(context, log, user_input, extra=""):
 
 def turn(user_input, last_move):
     context, log = read_file(CONTEXT), read_file(LOG)
-    response = generate(context, log, user_input)
+    parts = [p for p in log.split("\n## ") if p.strip()]
+    recent = ("\n## " + "\n## ".join(parts[-6:])) if parts else ""
+    response = generate(context, recent, user_input)
     move = classify(response)
     if move == last_move:
+        target = next(m for m in MOVES if m != last_move and m != "SILENT")
         response = generate(
-            context, log, user_input,
-            extra=f"Your previous move was {move}. Make a different move.",
+            context, recent, user_input,
+            extra=f"Your previous move was {move}. Make a {target} move instead.",
         )
         move = classify(response)
         if move == last_move:
@@ -87,13 +85,11 @@ def main():
         last_move = read_file(STATE).strip()
         response, move = turn(user_input, last_move)
         print(f"\n[{move}]\n{response if response.strip() else '[SILENT]'}\n")
-        write_file(STATE, move)
+        with open(STATE, "w") as f:
+            f.write(move)
         ts = datetime.now().isoformat(timespec="seconds")
-        write_file(
-            LOG,
-            f"\n## {ts} [{move}]\n**user:** {user_input}\n**mind:** {response}\n",
-            mode="a",
-        )
+        with open(LOG, "a") as f:
+            f.write(f"\n## {ts} [{move}]\n**user:** {user_input}\n**mind:** {response}\n")
 
 
 if __name__ == "__main__":
