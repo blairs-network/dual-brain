@@ -6,7 +6,8 @@ BASE = os.path.expanduser("~/Desktop/mind")
 CONTEXT = os.path.join(BASE, "context.md")
 LOG = os.path.join(BASE, "log.md")
 STATE = os.path.join(BASE, "state.md")
-MODEL = "hermes3:8b"
+GEN_MODEL = os.environ.get("MIND_GEN_MODEL", "hermes3:8b")
+CLF_MODEL = os.environ.get("MIND_CLF_MODEL", "llama3.2:3b")
 MOVES = {"ADVISING", "ENCOURAGING", "QUESTIONING", "OBSERVING", "SILENT"}
 
 
@@ -23,9 +24,9 @@ def write_file(path, text, mode="w"):
         f.write(text)
 
 
-def ollama(prompt, timeout=180):
+def ollama(prompt, model, timeout=180):
     r = subprocess.run(
-        ["ollama", "run", MODEL, prompt],
+        ["ollama", "run", model, prompt],
         capture_output=True, text=True, timeout=timeout,
     )
     return r.stdout.strip()
@@ -40,7 +41,7 @@ def classify(response):
         "Reply with only the single word, no punctuation, no explanation.\n\n"
         f"Message:\n{response}"
     )
-    out = ollama(prompt, timeout=60)
+    out = ollama(prompt, CLF_MODEL, timeout=60)
     word = out.split()[0].upper().strip(".,!?:;\"'") if out else ""
     return word if word in MOVES else "OBSERVING"
 
@@ -53,7 +54,7 @@ def generate(context, log, user_input, extra=""):
         "Respond as a thoughtful companion. Silence is acceptable; "
         "if you have nothing real to add, reply with an empty message."
     )
-    return ollama(prompt)
+    return ollama(prompt, GEN_MODEL)
 
 
 def turn(user_input, last_move):
@@ -72,7 +73,7 @@ def turn(user_input, last_move):
 
 
 def main():
-    print(f"mind.py — model={MODEL}. Type 'exit' to quit.")
+    print(f"mind.py — gen={GEN_MODEL} clf={CLF_MODEL}. Type 'exit' to quit.")
     while True:
         try:
             user_input = input("> ").strip()
