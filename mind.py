@@ -57,6 +57,24 @@ def generate(context, memory, log, user_input, extra=""):
     return ollama(prompt, GEN_MODEL)
 
 
+def critique(user_input, response, context):
+    if not response.strip():
+        return "ACCEPT"
+    prompt = (
+        "Judge this AI reply. Reply with exactly ONE word:\n"
+        "ACCEPT - genuine, specific, useful\n"
+        "REVISE - vague, sycophantic, generic, or echoes the rules back\n"
+        "REJECT - nothing real to say; silence would be better\n\n"
+        f"Standing rules: {context[:300]}\n"
+        f"User said: {user_input}\n"
+        f"AI replied: {response}\n\n"
+        "One word only:"
+    )
+    out = ollama(prompt, CLF_MODEL, timeout=60)
+    word = out.split()[0].upper().strip(".,!?:;\"'") if out else "ACCEPT"
+    return word if word in ("ACCEPT", "REVISE", "REJECT") else "ACCEPT"
+
+
 def summarize(chunk):
     prompt = (
         "Compress this dialogue chunk into one short third-person paragraph "
@@ -87,6 +105,14 @@ def turn(user_input, last_move):
     parts = [p for p in log.split("\n## ") if p.strip()]
     recent = ("\n## " + "\n## ".join(parts[-6:])) if parts else ""
     response = generate(context, memory, recent, user_input)
+    verdict = critique(user_input, response, context)
+    if verdict == "REJECT":
+        response = ""
+    elif verdict == "REVISE":
+        response = generate(
+            context, memory, recent, user_input,
+            extra="Previous attempt was vague, sycophantic, or generic. Be specific and direct.",
+        )
     move = classify(response)
     if move == last_move:
         i = MOVES.index(last_move) if last_move in MOVES else -1
