@@ -6,11 +6,14 @@ Only SENTINEL writes here. No model has write access.
 import sqlite3
 import json
 import time
+import datetime
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
 
-from sentinel.core.models import DetectionResult, InjectionFlag, Task, ToolCall
+from sentinel.core.models import (
+    DetectionResult, InjectionFlag, Task, ToolCall, ExceptionItem
+)
 
 
 DB_PATH = Path.home() / ".sentinel" / "dispatch.db"
@@ -68,10 +71,27 @@ def init_db(path: Path = DB_PATH) -> None:
                 source_hash TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS exception_queue (
+                id            TEXT PRIMARY KEY,
+                ts            REAL NOT NULL,
+                task_id       TEXT NOT NULL,
+                task_desc     TEXT,
+                reason        TEXT NOT NULL,
+                reason_detail TEXT,
+                risk_score    REAL DEFAULT 0.0,
+                flags_json    TEXT DEFAULT '[]',
+                status        TEXT DEFAULT 'PENDING',
+                decision      TEXT,
+                decision_ts   REAL,
+                mandate_note  TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_dispatch_ts     ON dispatch_log(ts);
             CREATE INDEX IF NOT EXISTS idx_dispatch_status ON dispatch_log(status);
             CREATE INDEX IF NOT EXISTS idx_flags_type      ON injection_flags(flag_type);
             CREATE INDEX IF NOT EXISTS idx_flags_severity  ON injection_flags(severity);
+            CREATE INDEX IF NOT EXISTS idx_queue_status    ON exception_queue(status);
+            CREATE INDEX IF NOT EXISTS idx_queue_ts        ON exception_queue(ts);
         """)
     print(f"[sentinel] DB ready at {path}")
 
@@ -189,6 +209,88 @@ def query_flags(severity: Optional[str] = None,
             LIMIT ?
         """, (*params, limit)).fetchall()
         return [dict(r) for r in rows]
+
+
+def queue_exception(item: ExceptionItem, path: Path = DB_PATH) -> None:
+    """Write an escalated exception to the queue."""
+    with get_db(path) as db:
+        db.execute("""
+            INSERT OR IGNORE INTO exception_queue
+            (id, ts, task_id, task_desc, reason, reason_detail,
+             risk_score, flags_json, status)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            item.id, item.ts, item.task_id, item.task_description,
+            item.reason.value if hasattr(item.reason, "value") else item.reason,
+            item.reason_detail, item.risk_score,
+            json.dumps(item.flags_data), item.status,
+        ))
+
+
+def get_pending_exceptions(path: Path = DB_PATH) -> list[dict]:
+    """Return all PENDING exception items, oldest first."""
+    with get_db(path) as db:
+        rows = db.execute("""
+            SELECT id, ts, task_id, task_desc, reason, reason_detail,
+                   risk_score, flags_json, status
+            FROM exception_queue
+            WHERE status = 'PENDING'
+            ORDER BY ts ASC
+        """).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["flags_data"] = json.loads(d.pop("flags_json", "[]"))
+            result.append(d)
+        return result
+
+
+def get_exception_count(path: Path = DB_PATH) -> int:
+    """Return the number of pending exceptions."""
+    with get_db(path) as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM exception_queue WHERE status = 'PENDING'"
+        ).fetchone()[0]
+
+
+def resolve_exception(
+    exception_id: str,
+    decision:     str,
+    mandate_note: Optional[str] = None,
+    path:         Path = DB_PATH,
+) -> None:
+    """Record a human decision and mark the exception resolved."""
+    with get_db(path) as db:
+        db.execute("""
+            UPDATE exception_queue
+            SET status='RESOLVED', decision=?, decision_ts=?, mandate_note=?
+            WHERE id=? AND status='PENDING'
+        """, (decision, time.time(), mandate_note, exception_id))
+
+
+def get_exception_stats(path: Path = DB_PATH) -> dict:
+    """Stats for the queue header bar."""
+    with get_db(path) as db:
+        last_resolved = db.execute("""
+            SELECT MAX(decision_ts) FROM exception_queue WHERE status = 'RESOLVED'
+        """).fetchone()[0]
+
+        today_start = datetime.datetime.combine(
+            datetime.date.today(), datetime.time.min
+        ).timestamp()
+        handled_today = db.execute("""
+            SELECT COUNT(*) FROM dispatch_log WHERE ts >= ? AND status = 'OK'
+        """, (today_start,)).fetchone()[0]
+
+        total_resolved = db.execute(
+            "SELECT COUNT(*) FROM exception_queue WHERE status = 'RESOLVED'"
+        ).fetchone()[0]
+
+        return {
+            "last_resolved_ts": last_resolved,
+            "handled_today":    handled_today,
+            "total_resolved":   total_resolved,
+        }
 
 
 def get_threat_summary(path: Path = DB_PATH) -> dict:

@@ -9,6 +9,19 @@ import time
 import uuid
 
 
+class DecisionType(str, Enum):
+    ALLOW       = "ALLOW"        # allow this class; caller should expand the mandate
+    ALLOW_ONCE  = "ALLOW_ONCE"   # allow only this specific instance
+    DENY        = "DENY"         # block; pattern should be added to block list
+
+
+class EscalationReason(str, Enum):
+    SEMANTIC_DRIFT  = "SEMANTIC_DRIFT"  # output deviated from task in ambiguous range
+    NOVEL_TOOL      = "NOVEL_TOOL"      # tool not in mandate; otherwise clean
+    SCOPE_BOUNDARY  = "SCOPE_BOUNDARY"  # scope expansion, unclear if within mandate
+    DOMAIN_BOUNDARY = "DOMAIN_BOUNDARY" # approved domain but edge-case path
+
+
 class Severity(str, Enum):
     LOW      = "LOW"
     MEDIUM   = "MEDIUM"
@@ -82,6 +95,23 @@ class InjectionFlag:
 
 
 @dataclass
+class ExceptionItem:
+    """A detection result escalated for human judgment."""
+    id:               str
+    task_id:          str
+    ts:               float
+    reason:           EscalationReason
+    reason_detail:    str          # plain-language explanation
+    task_description: str
+    flags_data:       list[dict]   # serialized InjectionFlag fields
+    risk_score:       float
+    status:           str  = "PENDING"    # PENDING | RESOLVED
+    decision:         Optional[str]  = None
+    decision_ts:      Optional[float] = None
+    mandate_note:     Optional[str]  = None
+
+
+@dataclass
 class DetectionResult:
     task_id:     str
     clean:       bool
@@ -92,6 +122,7 @@ class DetectionResult:
     ts:          float = field(default_factory=time.time)
     reviewed:    bool  = False
     reviewer:    Optional[str] = None
+    escalate:    bool  = False       # True → queued for human judgment
 
     @property
     def flag_count(self) -> int:

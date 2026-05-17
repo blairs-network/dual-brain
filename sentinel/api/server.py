@@ -13,9 +13,11 @@ Endpoints:
 """
 from __future__ import annotations
 import time
+from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from sentinel.core.models import (
@@ -23,7 +25,11 @@ from sentinel.core.models import (
     ToolCall as SentinelToolCall,
 )
 from sentinel.core.engine import Sentinel
-from sentinel.log.dispatch import query_recent, query_flags, get_threat_summary
+from sentinel.log.dispatch import (
+    query_recent, query_flags, get_threat_summary,
+    get_pending_exceptions, get_exception_count,
+    resolve_exception, get_exception_stats,
+)
 
 app = FastAPI(
     title       = "SENTINEL",
@@ -32,12 +38,14 @@ app = FastAPI(
     docs_url    = "/docs",
 )
 
-# CORS — localhost only
+# CORS — localhost only (server binds to 127.0.0.1, so external callers can't reach it).
+# "null" covers file:// access when the HTML is opened directly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins   = ["http://localhost:*", "http://127.0.0.1:*"],
-    allow_methods   = ["GET", "POST"],
-    allow_headers   = ["*"],
+    allow_origin_regex = r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins      = ["null"],
+    allow_methods      = ["GET", "POST"],
+    allow_headers      = ["*"],
 )
 
 # Singleton detection engine
@@ -84,11 +92,17 @@ class ScanResponse(BaseModel):
     task_id:    str
     clean:      bool
     block:      bool
+    escalate:   bool = False
     risk_score: float
     flag_count: int
     flags:      list[FlagResponse]
     summary:    str
     ts:         float
+
+
+class ResolveRequest(BaseModel):
+    decision:     str             # ALLOW | ALLOW_ONCE | DENY
+    mandate_note: Optional[str] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -123,6 +137,7 @@ def _build_response(result, task) -> ScanResponse:
         task_id    = task.id,
         clean      = result.clean,
         block      = result.block,
+        escalate   = result.escalate,
         risk_score = result.risk_score,
         flag_count = result.flag_count,
         flags      = [
@@ -267,6 +282,48 @@ def get_tool_abuse():
     """Which tools appear most in flagged executions."""
     from sentinel.log.threat_intel import get_tool_abuse_patterns
     return {"tools": get_tool_abuse_patterns()}
+
+
+# ── Exception Queue ───────────────────────────────────────────────────────────
+
+@app.get("/exceptions/count")
+def exceptions_count():
+    """Fast count check for polling. Returns {count: N}."""
+    return {"count": get_exception_count()}
+
+
+@app.get("/exceptions")
+def exceptions_list():
+    """Return all pending exceptions with queue stats."""
+    return {
+        "count": get_exception_count(),
+        "items": get_pending_exceptions(),
+        "stats": get_exception_stats(),
+    }
+
+
+@app.post("/exceptions/{exception_id}/resolve")
+def exceptions_resolve(exception_id: str, req: ResolveRequest):
+    """Record a human decision. decision must be ALLOW, ALLOW_ONCE, or DENY."""
+    valid = {"ALLOW", "ALLOW_ONCE", "DENY"}
+    if req.decision not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"decision must be one of {sorted(valid)}",
+        )
+    resolve_exception(exception_id, req.decision, req.mandate_note)
+    return {"ok": True, "exception_id": exception_id, "decision": req.decision}
+
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+
+@app.get("/ui", include_in_schema=False)
+def serve_ui():
+    """Serve the exception queue dashboard."""
+    html_path = Path(__file__).parent.parent.parent / "exception-queue.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=404, detail="UI not found")
+    return FileResponse(str(html_path), media_type="text/html")
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

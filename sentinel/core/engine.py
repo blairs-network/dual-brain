@@ -3,8 +3,10 @@ SENTINEL — Detection Engine
 Orchestrates all detectors. Single entry point for the full pipeline.
 Sits between L5 (Hermes execution) and L6 (Claude judge) in the stack.
 """
+import uuid
 from sentinel.core.models import (
-    Task, ToolCall, DetectionResult, InjectionFlag, Severity
+    Task, ToolCall, DetectionResult, InjectionFlag, Severity, FlagType,
+    ExceptionItem, EscalationReason,
 )
 from sentinel.detectors.tool_control   import check_tool_control, check_hop_depth
 from sentinel.detectors.content_analysis import (
@@ -13,7 +15,51 @@ from sentinel.detectors.content_analysis import (
 from sentinel.detectors.semantic import (
     check_semantic_drift, check_tool_result_drift, compute_risk_score
 )
-from sentinel.log.dispatch import log_result, init_db
+from sentinel.log.dispatch import log_result, init_db, queue_exception
+
+
+def _escalation_reason(flags: list[InjectionFlag]) -> tuple[EscalationReason, str]:
+    """Map flags to a human-readable escalation reason."""
+    types = {f.flag_type for f in flags}
+
+    if FlagType.SEMANTIC_DRIFT in types:
+        return (
+            EscalationReason.SEMANTIC_DRIFT,
+            "The action's output deviated from the task scope in an ambiguous range. "
+            "Not clearly injected — could be legitimate context the task needs.",
+        )
+    if FlagType.UNAUTHORIZED_TOOL in types:
+        tool_names = [
+            f.tool_call.tool for f in flags
+            if f.flag_type == FlagType.UNAUTHORIZED_TOOL and f.tool_call
+        ]
+        tool_str = ", ".join(tool_names) if tool_names else "an unlisted tool"
+        return (
+            EscalationReason.NOVEL_TOOL,
+            f"The task used {tool_str}, which isn't listed in its mandate. "
+            "The tool appears related to the task intent. "
+            "The mandate may need expanding to cover this action.",
+        )
+    if FlagType.SCOPE_EXPANSION in types:
+        return (
+            EscalationReason.SCOPE_BOUNDARY,
+            "The action may be at the edge of the authorized scope. "
+            "Not clearly out of bounds — could be a gap in the mandate definition.",
+        )
+    if FlagType.UNEXPECTED_DESTINATION in types:
+        return (
+            EscalationReason.DOMAIN_BOUNDARY,
+            "The action targeted a destination near but outside the approved list. "
+            "This may be a legitimate sub-domain or a related service.",
+        )
+
+    # fallback — elevated score with no specific flag match
+    return (
+        EscalationReason.SEMANTIC_DRIFT,
+        "The overall risk score fell in an ambiguous range. "
+        "No specific injection pattern matched, but the action couldn't be "
+        "automatically cleared.",
+    )
 
 
 class Sentinel:
@@ -83,11 +129,18 @@ class Sentinel:
         # ── Score and decide ──────────────────────────────────────────────────
         risk_score = compute_risk_score(all_flags, tool_calls, task)
 
-        # Block if any critical flag OR risk score exceeds threshold
+        # Block: any critical/high flag or risk above threshold
         block = (
             any(f.is_critical for f in all_flags)
             or any(f.is_blocking for f in all_flags)
             or risk_score >= 0.65
+        )
+
+        # Escalate: no blocking signal but genuine ambiguity present.
+        # Only MEDIUM-severity flags reach here (HIGH/CRITICAL already caught above).
+        escalate = not block and (
+            any(f.severity == Severity.MEDIUM for f in all_flags)
+            or (0.35 <= risk_score < 0.65 and not all_flags)
         )
 
         result = DetectionResult(
@@ -97,14 +150,39 @@ class Sentinel:
             block      = block,
             risk_score = risk_score,
             tool_calls = tool_calls,
+            escalate   = escalate,
         )
 
         if self.verbose:
             print(f"[sentinel] {result.summary()}")
 
-        # ── Persist to dispatch log ───────────────────────────────────────────
+        # ── Persist ───────────────────────────────────────────────────────────
         if self.persist:
             log_result(result, task, dest)
+
+            if escalate:
+                reason, reason_detail = _escalation_reason(all_flags)
+                flags_data = [
+                    {
+                        "flag_type": f.flag_type.value,
+                        "severity":  f.severity.value,
+                        "detail":    f.detail,
+                        "evidence":  f.evidence,
+                        "tool":      f.tool_call.tool if f.tool_call else None,
+                    }
+                    for f in all_flags
+                ]
+                exc = ExceptionItem(
+                    id               = str(uuid.uuid4())[:8],
+                    task_id          = task.id,
+                    ts               = result.ts,
+                    reason           = reason,
+                    reason_detail    = reason_detail,
+                    task_description = task.description,
+                    flags_data       = flags_data,
+                    risk_score       = risk_score,
+                )
+                queue_exception(exc)
 
         return result
 

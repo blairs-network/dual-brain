@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Exception Queue · SENTINEL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:         #0b0b0b;
+      --fg:         #ccc7be;
+      --fg-dim:     #4e4a46;
+      --fg-label:   #787168;
+      --fg-serif:   #d4cfc6;
+      --border:     #1c1c1c;
+      --border-hi:  #2c2a28;
+      --accent:     #c4a054;
+      --sev-m:      #686858;
+      --sev-h:      #a87030;
+      --sev-c:      #9a3232;
+      --resolved:   #3a6a4a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Martian Mono', 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body { min-height: 100vh; }
+
+    main {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 72px 40px 120px;
+    }
+
+    /* ── Header ────────────────────────────────────────────────────────── */
+
+    .hd {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 10px;
+    }
+
+    .hd-wordmark {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--fg-label);
+    }
+
+    .hd-count {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--fg-dim);
+      transition: color 0.3s;
+    }
+
+    .hd-count.has-items { color: var(--accent); }
+
+    .stats-bar {
+      font-size: 10px;
+      color: var(--fg-dim);
+      letter-spacing: 0.04em;
+      min-height: 16px;
+      margin-bottom: 40px;
+    }
+
+    /* ── Rule ──────────────────────────────────────────────────────────── */
+
+    .rule {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0;
+    }
+
+    /* ── Empty ─────────────────────────────────────────────────────────── */
+
+    .empty {
+      padding-top: 52px;
+    }
+
+    .empty-main {
+      font-size: 14px;
+      color: var(--fg);
+      margin-bottom: 10px;
+    }
+
+    .empty-sub {
+      font-size: 10px;
+      color: var(--fg-dim);
+    }
+
+    /* ── Exception item ────────────────────────────────────────────────── */
+
+    .item {
+      padding: 30px 0 28px;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+      max-height: 900px;
+      transition:
+        opacity   0.25s ease,
+        max-height 0.4s  ease,
+        padding   0.25s ease,
+        border-color 0.25s ease;
+    }
+
+    .item.resolving {
+      opacity: 0;
+      max-height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-color: transparent;
+    }
+
+    /* meta row: type + age */
+    .item-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 10px;
+    }
+
+    .item-type {
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .sev-CRITICAL { color: var(--sev-c); }
+    .sev-HIGH     { color: var(--sev-h); }
+    .sev-MEDIUM   { color: var(--sev-m); }
+    .sev-LOW      { color: var(--fg-dim); }
+
+    .item-age {
+      font-size: 10px;
+      color: var(--fg-dim);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* task: the human context — serif, slightly larger */
+    .item-task {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 15px;
+      color: var(--fg-serif);
+      line-height: 1.4;
+      margin-bottom: 10px;
+    }
+
+    /* action: the technical line — mono, dimmer */
+    .item-action {
+      font-size: 11px;
+      color: var(--fg-label);
+      margin-bottom: 14px;
+      word-break: break-all;
+    }
+
+    /* reason: plain-language explanation */
+    .item-reason {
+      font-size: 11px;
+      color: var(--fg-dim);
+      line-height: 1.75;
+      margin-bottom: 6px;
+    }
+
+    .item-score {
+      font-size: 10px;
+      color: var(--fg-dim);
+      margin-bottom: 24px;
+    }
+
+    /* ── Buttons ───────────────────────────────────────────────────────── */
+
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: 'Martian Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: none;
+      border: 1px solid var(--border-hi);
+      color: var(--fg-label);
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      line-height: 1;
+    }
+
+    .btn:hover {
+      border-color: var(--fg-dim);
+      color: var(--fg);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .btn-allow-class {
+      border-color: #253025;
+      color: #4a7a52;
+    }
+    .btn-allow-class:hover {
+      border-color: #3a5a3a;
+      color: #5a9a62;
+    }
+
+    .btn-deny {
+      border-color: #302020;
+      color: #784040;
+    }
+    .btn-deny:hover {
+      border-color: #582828;
+      color: #985050;
+    }
+
+    .btn-primary {
+      border-color: var(--fg-label);
+      color: var(--fg);
+    }
+    .btn-primary:hover {
+      border-color: var(--fg);
+    }
+
+    .btn-ghost {
+      border-color: transparent;
+      color: var(--fg-dim);
+    }
+    .btn-ghost:hover {
+      color: var(--fg-label);
+      border-color: transparent;
+    }
+
+    /* ── Confirm state ─────────────────────────────────────────────────── */
+
+    .confirm-state { display: none; }
+    .confirm-state.visible { display: block; }
+
+    .confirm-label {
+      font-size: 11px;
+      color: var(--fg-label);
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    .mandate-field { margin-bottom: 16px; }
+
+    .mandate-label {
+      font-size: 9px;
+      color: var(--fg-dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .mandate-input {
+      width: 100%;
+      font-family: 'Martian Mono', monospace;
+      font-size: 11px;
+      background: #111;
+      border: 1px solid var(--border-hi);
+      color: var(--fg);
+      padding: 9px 11px;
+      resize: vertical;
+      min-height: 62px;
+      outline: none;
+      line-height: 1.6;
+      transition: border-color 0.15s;
+    }
+
+    .mandate-input:focus { border-color: var(--fg-dim); }
+    .mandate-input::placeholder { color: var(--fg-dim); }
+
+    /* ── Connection error ──────────────────────────────────────────────── */
+
+    .conn-error {
+      padding-top: 48px;
+      font-size: 11px;
+      color: var(--sev-c);
+      line-height: 1.7;
+    }
+
+    @media (max-width: 600px) {
+      main { padding: 48px 24px 80px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="hd">
+    <span class="hd-wordmark">Exception Queue</span>
+    <span class="hd-count" id="count-badge"></span>
+  </div>
+  <div class="stats-bar" id="stats-bar"></div>
+
+  <hr class="rule" />
+
+  <div id="queue-root"></div>
+</main>
+
+<script>
+  // When served from FastAPI at /ui, use relative paths (same origin, no CORS).
+  // When opened as file://, fall back to the default SENTINEL address.
+  const API = (window.location.origin === 'null' || window.location.protocol === 'file:')
+    ? 'http://localhost:7749'
+    : '';
+
+  let lastCount = -1;
+
+  // ── Utilities ─────────────────────────────────────────────────────────────
+
+  function esc(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function age(ts) {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (s < 60)    return s < 5 ? 'just now' : `${s}s ago`;
+    if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+
+  function statsText(stats) {
+    if (!stats) return '';
+    const parts = [];
+    if (stats.handled_today != null) parts.push(`${stats.handled_today} handled today`);
+    if (stats.last_resolved_ts)      parts.push(`last cleared ${age(stats.last_resolved_ts)}`);
+    else if (stats.total_resolved === 0) parts.push('queue has never cleared');
+    return parts.join(' · ');
+  }
+
+  function highestSeverity(flags) {
+    for (const s of ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']) {
+      if ((flags || []).some(f => f.severity === s)) return s;
+    }
+    return 'MEDIUM';
+  }
+
+  function reasonLabel(r) {
+    return {
+      SEMANTIC_DRIFT:  'Semantic Drift',
+      NOVEL_TOOL:      'Unauthorized Tool',
+      SCOPE_BOUNDARY:  'Scope Boundary',
+      DOMAIN_BOUNDARY: 'Domain Boundary',
+    }[r] || r;
+  }
+
+  function actionLine(flags) {
+    const withTools = (flags || []).filter(f => f.tool);
+    if (!withTools.length) return null;
+    const tools = [...new Set(withTools.map(f => f.tool))];
+    return `Tried: ${tools.join(', ')}`;
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  function renderEmpty(stats) {
+    const sub = statsText(stats);
+    return `<div class="empty">
+      <div class="empty-main">Nothing needs your attention.</div>
+      ${sub ? `<div class="empty-sub">${esc(sub)}</div>` : ''}
+    </div>`;
+  }
+
+  function makeItem(item) {
+    const sev    = highestSeverity(item.flags_data);
+    const action = actionLine(item.flags_data);
+    const el     = document.createElement('div');
+    el.className = 'item';
+    el.dataset.id = item.id;
+
+    el.innerHTML = `
+      <div class="item-meta">
+        <span class="item-type sev-${esc(sev)}">${esc(reasonLabel(item.reason))}&emsp;·&emsp;${esc(sev)}</span>
+        <span class="item-age">${esc(age(item.ts))}</span>
+      </div>
+
+      <div class="item-task">${esc(item.task_desc || item.task_description || '—')}</div>
+
+      ${action ? `<div class="item-action">— ${esc(action)}</div>` : ''}
+
+      <div class="item-reason">${esc(item.reason_detail || '')}</div>
+      <div class="item-score">risk&nbsp;${(+(item.risk_score || 0)).toFixed(2)}</div>
+
+      <div class="btn-row" data-role="buttons">
+        <button class="btn btn-allow-class" data-d="ALLOW">Allow class</button>
+        <button class="btn"                 data-d="ALLOW_ONCE">Allow once</button>
+        <button class="btn btn-deny"        data-d="DENY">Deny</button>
+      </div>
+
+      <div class="confirm-state" data-role="confirm">
+        <div class="confirm-label" data-role="clabel"></div>
+        <div class="mandate-field" data-role="mandate-wrap" style="display:none">
+          <div class="mandate-label">Mandate note <span style="opacity:.5;font-weight:300">(optional)</span></div>
+          <textarea class="mandate-input" data-role="mnote"
+            placeholder="What should the mandate say about this type of action?"></textarea>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" data-role="cbtn">Confirm</button>
+          <button class="btn btn-ghost"   data-role="xbtn">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const btnRow   = el.querySelector('[data-role="buttons"]');
+    const confirm  = el.querySelector('[data-role="confirm"]');
+    const clabel   = el.querySelector('[data-role="clabel"]');
+    const mWrap    = el.querySelector('[data-role="mandate-wrap"]');
+    const mNote    = el.querySelector('[data-role="mnote"]');
+    const cBtn     = el.querySelector('[data-role="cbtn"]');
+    const xBtn     = el.querySelector('[data-role="xbtn"]');
+
+    let pending = null;
+
+    el.querySelectorAll('[data-d]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pending = btn.dataset.d;
+        btnRow.style.display = 'none';
+        confirm.classList.add('visible');
+
+        if (pending === 'ALLOW') {
+          clabel.textContent = 'Allowing this class of action. Describe any mandate update below.';
+          mWrap.style.display = 'block';
+        } else if (pending === 'ALLOW_ONCE') {
+          clabel.textContent = 'Allowing this specific instance only. The mandate is unchanged.';
+          mWrap.style.display = 'none';
+        } else {
+          clabel.textContent = 'Denying this action.';
+          mWrap.style.display = 'none';
+        }
+      });
+    });
+
+    xBtn.addEventListener('click', () => {
+      confirm.classList.remove('visible');
+      btnRow.style.display = 'flex';
+      mNote.value = '';
+      pending = null;
+    });
+
+    cBtn.addEventListener('click', async () => {
+      if (!pending) return;
+      cBtn.disabled = true;
+      cBtn.textContent = '…';
+      const note = (pending === 'ALLOW' && mNote.value.trim()) ? mNote.value.trim() : null;
+      await decide(item.id, pending, note, el, cBtn, clabel);
+    });
+
+    return el;
+  }
+
+  // ── API ───────────────────────────────────────────────────────────────────
+
+  async function load() {
+    try {
+      const r = await fetch(`${API}/exceptions`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      render(data);
+    } catch (e) {
+      showConnError(e);
+    }
+  }
+
+  async function decide(id, decision, note, el, cBtn, clabel) {
+    try {
+      const r = await fetch(`${API}/exceptions/${id}/resolve`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ decision, mandate_note: note }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      collapse(el);
+    } catch (e) {
+      cBtn.disabled = false;
+      cBtn.textContent = 'Confirm';
+      clabel.textContent = `Error: ${e.message} — try again.`;
+      clabel.style.color = 'var(--sev-c)';
+    }
+  }
+
+  // ── DOM mutations ─────────────────────────────────────────────────────────
+
+  function render({ count, items, stats }) {
+    lastCount = count;
+    const badge = document.getElementById('count-badge');
+    const sbar  = document.getElementById('stats-bar');
+    const root  = document.getElementById('queue-root');
+
+    sbar.textContent = statsText(stats);
+
+    if (count === 0) {
+      badge.textContent = '0 pending';
+      badge.classList.remove('has-items');
+      root.innerHTML = renderEmpty(stats);
+      return;
+    }
+
+    badge.textContent = `${count} pending`;
+    badge.classList.add('has-items');
+
+    // Clear out a previous empty state or error
+    const emptyEl = root.querySelector('.empty, .conn-error');
+    if (emptyEl) emptyEl.remove();
+
+    // IDs already rendered
+    const existingIds = new Set(
+      [...root.querySelectorAll('.item')].map(n => n.dataset.id)
+    );
+    const incomingIds = new Set(items.map(i => i.id));
+
+    // Add new items (append — oldest-first from server)
+    for (const item of items) {
+      if (!existingIds.has(item.id)) {
+        root.appendChild(makeItem(item));
+      }
+    }
+
+    // Remove items resolved elsewhere
+    for (const el of root.querySelectorAll('.item')) {
+      if (!incomingIds.has(el.dataset.id)) collapse(el);
+    }
+  }
+
+  function collapse(el) {
+    el.classList.add('resolving');
+    setTimeout(() => {
+      el.remove();
+      decrement();
+      checkEmpty();
+    }, 380);
+  }
+
+  function decrement() {
+    const badge = document.getElementById('count-badge');
+    const n = parseInt(badge.textContent, 10);
+    if (isNaN(n)) return;
+    const next = Math.max(0, n - 1);
+    badge.textContent = `${next} pending`;
+    if (next === 0) badge.classList.remove('has-items');
+    lastCount = next;
+  }
+
+  function checkEmpty() {
+    const root  = document.getElementById('queue-root');
+    const items = root.querySelectorAll('.item:not(.resolving)');
+    if (items.length === 0 && !root.querySelector('.empty')) {
+      const badge = document.getElementById('count-badge');
+      badge.textContent = '0 pending';
+      badge.classList.remove('has-items');
+      root.innerHTML = renderEmpty(null);
+    }
+  }
+
+  function showConnError(e) {
+    const root = document.getElementById('queue-root');
+    if (root.querySelector('.conn-error')) return;
+    const div = document.createElement('div');
+    div.className = 'conn-error';
+    div.textContent =
+      `SENTINEL unreachable at ${API || window.location.origin} — ${e.message}. ` +
+      `Start the server with: sentinel-serve`;
+    root.innerHTML = '';
+    root.appendChild(div);
+  }
+
+  // ── Poll ──────────────────────────────────────────────────────────────────
+
+  async function poll() {
+    try {
+      const r = await fetch(`${API}/exceptions/count`);
+      if (!r.ok) return;
+      const { count } = await r.json();
+      if (count !== lastCount) await load();
+    } catch (_) {
+      // silent — don't thrash the error state on transient failures
+    }
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+
+  load();
+  setInterval(poll, 30_000);
+</script>
+</body>
+</html>
