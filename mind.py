@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from datetime import datetime
 
@@ -11,6 +12,37 @@ GEN_MODEL = os.environ.get("MIND_GEN_MODEL", "hermes3:8b")
 CLF_MODEL = os.environ.get("MIND_CLF_MODEL", "llama3.2:3b")
 MOVES = ("ADVISING", "ENCOURAGING", "QUESTIONING", "OBSERVING", "SILENT")
 SUMMARIZE_EVERY = 10
+
+# ── SENTINEL ──────────────────────────────────────────────────────────────────
+# Scans every Hermes response before it reaches you.
+# Set SENTINEL_ENABLED=0 to disable (fails open if the package isn't installed).
+
+_sentinel = None
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from sentinel.core.engine import Sentinel as _Sentinel
+    from sentinel.core.models import Task as _SentinelTask
+    if os.environ.get("SENTINEL_ENABLED", "1") != "0":
+        _sentinel = _Sentinel(persist=True, verbose=False)
+except Exception:
+    pass  # fail open — mind.py works without SENTINEL
+
+
+def _scan(user_input: str, response: str) -> bool:
+    """
+    Scan a Hermes response. Returns False if SENTINEL blocks it.
+    Escalations are queued silently — the response still reaches you.
+    """
+    if _sentinel is None or not response.strip():
+        return True
+    task = _SentinelTask(
+        description      = user_input,
+        authorized_tools = [],
+        data_scope       = ["conversation"],
+        source           = "mind",
+    )
+    result = _sentinel.scan(task, [], response)
+    return not result.block
 
 
 def read_file(path):
@@ -87,6 +119,10 @@ def turn(user_input, last_move):
     parts = [p for p in log.split("\n## ") if p.strip()]
     recent = ("\n## " + "\n## ".join(parts[-6:])) if parts else ""
     response = generate(context, memory, recent, user_input)
+
+    if not _scan(user_input, response):
+        return "[SENTINEL blocked this response.]", last_move
+
     move = classify(response)
     if move == last_move:
         i = MOVES.index(last_move) if last_move in MOVES else -1
@@ -95,6 +131,8 @@ def turn(user_input, last_move):
             context, memory, recent, user_input,
             extra=f"Your previous move was {move}. Make a {target} move instead.",
         )
+        if not _scan(user_input, response):
+            return "[SENTINEL blocked this response.]", last_move
         move = classify(response)
         if move == last_move:
             return "I don't have anything new.", last_move
