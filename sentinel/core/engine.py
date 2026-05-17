@@ -213,7 +213,7 @@ class Sentinel:
                     for r in recipients:
                         if r not in authorized_recipients:
                             result.flags.append(InjectionFlag(
-                                flag_type = InjectionFlag.__class__,
+                                flag_type = FlagType.LATERAL_MOVE_ATTEMPT,
                                 severity  = Severity.CRITICAL,
                                 detail    = (f"Email to unauthorized recipient: {r}. "
                                              f"Possible lateral movement."),

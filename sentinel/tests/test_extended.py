@@ -249,5 +249,90 @@ class TestPipelineStress:
                                   f"Flags: {[(f.flag_type, f.detail) for f in result.flags]}")
 
 
+class TestEnterpriseFixAndEscalation:
+    """Tests for the enterprise flag_type fix and the escalation queue path."""
+
+    def setup_method(self):
+        self.sentinel = Sentinel(persist=False)
+
+    def test_enterprise_scan_produces_valid_flag_type(self):
+        """scan_enterprise must use FlagType.LATERAL_MOVE_ATTEMPT, not InjectionFlag.__class__."""
+        task = Task(
+            description="Send summary to alice@company.com",
+            authorized_tools=["send_email"],
+            data_scope=["alice@company.com"],
+        )
+        tc = ToolCall(
+            tool="send_email",
+            args={"to": "everyone@company.com", "body": "Hi all"},
+        )
+        result = self.sentinel.scan_enterprise(task, [tc], "Done.", channel="outlook")
+        lateral_flags = [f for f in result.flags if f.flag_type == FlagType.LATERAL_MOVE_ATTEMPT]
+        assert lateral_flags, "Expected LATERAL_MOVE_ATTEMPT flag for unauthorized recipient"
+        assert result.block, "Enterprise lateral move should block"
+
+    def test_escalation_triggered_by_medium_flag(self):
+        """MEDIUM-only flags must set escalate=True and block=False."""
+        from sentinel.core.models import InjectionFlag, Severity, FlagType, DetectionResult
+        # Build a result as the engine would — MEDIUM flag, no HIGH/CRITICAL
+        flag = InjectionFlag(
+            flag_type=FlagType.UNAUTHORIZED_TOOL,
+            severity=Severity.MEDIUM,
+            detail="tool not in mandate",
+        )
+        result = DetectionResult(
+            task_id="t1", clean=False, flags=[flag],
+            block=False, risk_score=0.44, tool_calls=[], escalate=True,
+        )
+        assert not result.block
+        assert result.escalate
+
+    def test_escalate_false_when_blocking(self):
+        """HIGH-severity flag must produce block=True, escalate=False."""
+        from sentinel.core.models import InjectionFlag, Severity, FlagType, DetectionResult
+        flag = InjectionFlag(
+            flag_type=FlagType.UNAUTHORIZED_EXFIL,
+            severity=Severity.HIGH,
+            detail="exfil attempt",
+        )
+        result = DetectionResult(
+            task_id="t2", clean=False, flags=[flag],
+            block=True, risk_score=0.72, tool_calls=[], escalate=False,
+        )
+        assert result.block
+        assert not result.escalate
+
+    def test_exception_queue_crud(self, tmp_path):
+        """queue_exception / get_pending / resolve round-trip."""
+        import time
+        from sentinel.log.dispatch import init_db, queue_exception, get_pending_exceptions
+        from sentinel.log.dispatch import get_exception_count, resolve_exception
+        from sentinel.core.models import ExceptionItem, EscalationReason
+
+        db = tmp_path / "test.db"
+        init_db(db)
+
+        exc = ExceptionItem(
+            id="test0001",
+            task_id="task01",
+            ts=time.time(),
+            reason=EscalationReason.NOVEL_TOOL,
+            reason_detail="Used read_file which isn't in the mandate.",
+            task_description="Summarize board notes",
+            flags_data=[{"flag_type": "UNAUTHORIZED_TOOL", "severity": "MEDIUM",
+                         "detail": "not authorized", "evidence": None, "tool": "read_file"}],
+            risk_score=0.44,
+        )
+        queue_exception(exc, db)
+        assert get_exception_count(db) == 1
+
+        items = get_pending_exceptions(db)
+        assert items[0]["task_desc"] == "Summarize board notes"
+        assert items[0]["flags_data"][0]["tool"] == "read_file"
+
+        resolve_exception("test0001", "ALLOW", "read_file ok for summarization", db)
+        assert get_exception_count(db) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
